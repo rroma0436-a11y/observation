@@ -39,9 +39,13 @@ jobs:
         pip install --upgrade pip
         pip install cython==0.29.36 buildozer
 
-    - name: Build with Buildozer
+    - name: Accept Licenses and Build with Buildozer
       run: |
-        export PATH=$PATH:~/.local/bin
+        mkdir -p ~/.android
+        touch ~/.android/repositories.cfg
+        # Автоматично відповідаємо 'y' на будь-які запити ліцензій під час збірки
+        yes | buildozer -v android release || true
+        # Повторний запуск на випадок перерваного потоку, щоб точно завершити збірку
         buildozer -v android release
 
     - name: Upload APK artifact
