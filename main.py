@@ -1,7 +1,7 @@
 """Щоденник спостережень — офлайн-застосунок для педагогів ЗДО."""
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from kivy.app import App
 from kivy.clock import Clock, mainthread
@@ -24,8 +24,9 @@ from kivy.utils import escape_markup
 
 import android_bridge as ab
 import pdf_report
-from storage import (CRITERIA, ROLES, Diary, UserStore, format_day, format_month,
-                     plural, safe_filename, today)
+from storage import (GAMES, NEEDS, PERIODS, ROLES, TASK_MODES, Diary, UserStore, format_day,
+                     format_day_short, format_month, period_filled, period_lines, plural,
+                     safe_filename, today)
 
 # ----------------------------------------------------------------------
 # Розміри (dp/sp масштабуються під щільність екрана телефону)
@@ -242,45 +243,68 @@ def confirm(text, on_yes, yes_text="Так", danger=True):
 def open_day_preview(day):
     """Попередній перегляд усіх записів за день."""
     app = App.get_running_app()
-    recs = app.diary.records(day)
+    entries = sorted(app.diary.entries(day), key=lambda e: e["child_name"].lower())
     box = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(4))
     sv, col = scroll_column(padding=dp(4), spacing=dp(10))
     popup = Popup(title=f"Записи за {format_day(day)}", title_size=FS, title_align="center",
                   content=box, size_hint=(0.96, 0.92), separator_color=PRIMARY)
 
-    if not recs:
+    if not entries:
         col.add_widget(Lbl(text="За цей день записів ще немає.", halign="center"))
-    for r in recs:
+    for e in entries:
         c = card()
-        c.add_widget(Lbl(text=f"{r['time']}  ·  {r['child_name']}", bold=True))
-        if r.get("criteria"):
-            c.add_widget(Lbl(text=", ".join(r["criteria"]), color=GREEN_TEXT, font_size=FS_SMALL))
-        if r.get("note"):
-            c.add_widget(Lbl(text=r["note"]))
-        if r.get("media"):
-            n = len(r["media"])
-            c.add_widget(hint(f"{n} {plural(n, 'медіафайл', 'медіафайли', 'медіафайлів')}"))
+        c.add_widget(Lbl(text=e["child_name"], bold=True, font_size=sp(21)))
+        for key, title, _, _ in PERIODS:
+            p = e["periods"].get(key)
+            if not period_filled(p):
+                continue
+            c.add_widget(Lbl(text=title, bold=True, color=GREEN_TEXT))
+            for label, value in period_lines(p):
+                c.add_widget(Lbl(text=f"{label}: {value}", font_size=FS_SMALL))
+            if p.get("media"):
+                n = len(p["media"])
+                c.add_widget(hint(f"{n} {plural(n, 'медіафайл', 'медіафайли', 'медіафайлів')}"))
 
-        def ask_delete(*_, rec_id=r["id"]):
+        def edit(*_, cid=e["child_id"]):
+            popup.dismiss()
+            app.open_period(day, cid, 0)
+
+        def ask_delete(*_, eid=e["id"], name=e["child_name"]):
             def do_delete():
-                app.diary.delete_record(day, rec_id)
+                app.diary.delete_entry(day, eid)
                 popup.dismiss()
                 app.refresh_tabs()
                 open_day_preview(day)
-            confirm("Видалити цей запис разом із його фото та відео?", do_delete, "Видалити")
-        c.add_widget(Btn(text="Видалити запис", bg=DANGER, height=BTN_H_SMALL,
-                         font_size=FS_SMALL, on_release=ask_delete))
+            confirm(f"Видалити весь запис про «{name}» за цей день разом із фото та відео?",
+                    do_delete, "Видалити")
+        row = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=BTN_H_SMALL)
+        b_edit = Btn(text="Редагувати", bg=SECOND, height=BTN_H_SMALL, font_size=FS_SMALL, on_release=edit)
+        b_edit.disabled = app.diary.get_child(e["child_id"]) is None
+        row.add_widget(b_edit)
+        row.add_widget(Btn(text="Видалити", bg=DANGER, height=BTN_H_SMALL, font_size=FS_SMALL,
+                           on_release=ask_delete))
+        c.add_widget(row)
         col.add_widget(c)
     box.add_widget(sv)
 
     row = GridLayout(cols=2, spacing=dp(10), size_hint_y=None, height=BTN_H)
-    send = Btn(text="Надіслати Excel", on_release=lambda *_: app.share_file(
-        app.diary.excel_path(day), f"{EXPORT_ROOT}/Таблиці", XLSX_MIME))
-    send.disabled = not recs
+    send = Btn(text="Надіслати Excel", bg=ACCENT, on_release=lambda *_: app.share_day(day))
+    send.disabled = not entries
     row.add_widget(send)
     row.add_widget(Btn(text="Закрити", bg=SECOND, on_release=popup.dismiss))
     box.add_widget(row)
     popup.open()
+
+
+def recent_days(n=14):
+    """{'Сьогодні, 13 листопада': '2026-11-13', ...} за останні n днів."""
+    out = {}
+    now = datetime.now()
+    for i in range(n):
+        d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        prefix = "Сьогодні, " if i == 0 else ("Вчора, " if i == 1 else "")
+        out[prefix + format_day_short(d)] = d
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -582,62 +606,60 @@ class WizardScreen(Screen):
 
 
 # ----------------------------------------------------------------------
-# Вкладки головного екрана
+# Вкладка «Запис»: дата, дитина, чотири режимні моменти
 # ----------------------------------------------------------------------
 class RecordTab(Screen):
     def __init__(self, app, **kw):
         super().__init__(name="record", **kw)
         self.app = app
-        self.pending = []   # медіафайли до наступного запису
-        self.undo = []      # історія тексту для кнопки «Назад»
         self.child_map = {}
+        self.day_map = {}
         sv, col = scroll_column()
 
-        self.date_lbl = hint("")
-        col.add_widget(self.date_lbl)
+        col.add_widget(section("Дата"))
+        self.day_spinner = make_spinner()
+        self.day_spinner.bind(text=lambda *_: self.refresh_periods())
+        col.add_widget(self.day_spinner)
+
         col.add_widget(section("Дитина"))
-        self.child_spinner = make_spinner()
+        self.child_spinner = make_spinner(text="Оберіть дитину")
+        self.child_spinner.bind(text=lambda *_: self.refresh_periods())
         col.add_widget(self.child_spinner)
 
-        col.add_widget(section("Критерії розвитку"))
-        grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None)
-        grid.bind(minimum_height=grid.setter("height"))
-        self.crit = {}
-        for c in CRITERIA:
-            t = ToggleBtn(text=c, font_size=FS_SMALL)
-            self.crit[c] = t
-            grid.add_widget(t)
-        col.add_widget(grid)
-
-        col.add_widget(section("Спостереження"))
-        self.note = make_input("Введіть або надиктуйте спостереження...", multiline=True, height=dp(190))
-        col.add_widget(self.note)
-        row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=BTN_H)
-        row.add_widget(Btn(text="Голос", bg=ACCENT, on_release=self.voice))
-        row.add_widget(Btn(text="Назад", bg=SECOND, on_release=self.undo_last))
-        row.add_widget(Btn(text="Стерти", bg=DANGER, on_release=self.clear_note))
-        col.add_widget(row)
-
-        col.add_widget(section("Фото та відео"))
-        mrow = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=BTN_H)
-        mrow.add_widget(Btn(text="Додати фото / відео", bg=SECOND, font_size=FS_SMALL, on_release=self.add_media))
-        mrow.add_widget(Btn(text="Прибрати додані", bg=SECOND, font_size=FS_SMALL, on_release=self.drop_media))
-        col.add_widget(mrow)
-        self.media_lbl = hint("")
-        col.add_widget(self.media_lbl)
+        col.add_widget(section("Режимні моменти"))
+        col.add_widget(hint("Натисніть на етап, щоб заповнити характеристику діяльності дитини."))
+        self.period_btns = []
+        for i, (key, title, _, _) in enumerate(PERIODS):
+            b = Btn(text=title, bg=CARD_LIGHT, height=dp(80),
+                    on_release=lambda *_, idx=i: self.open_period(idx))
+            self.period_btns.append(b)
+            col.add_widget(b)
 
         col.add_widget(spacer())
-        col.add_widget(Btn(text="Зберегти запис", height=BTN_H_BIG, bold=True, on_release=self.save))
-        col.add_widget(Btn(text="Попередній перегляд за сьогодні", bg=SECOND,
-                           on_release=lambda *_: open_day_preview(today())))
+        self.btn_next = Btn(text="Далі", height=BTN_H_BIG, bold=True, on_release=self.go_next)
+        col.add_widget(self.btn_next)
+        col.add_widget(Btn(text="Попередній перегляд за день", bg=SECOND,
+                           on_release=lambda *_: open_day_preview(self.day)))
+        col.add_widget(Btn(text="Надіслати таблицю за день", bg=ACCENT,
+                           on_release=lambda *_: app.share_day(self.day)))
         self.add_widget(sv)
-        self._update_media()
+
+    @property
+    def day(self):
+        return self.day_map.get(self.day_spinner.text, today())
+
+    @property
+    def child_id(self):
+        return self.child_map.get(self.child_spinner.text)
 
     def on_pre_enter(self, *args):
         if not self.app.diary:
             return
-        self.date_lbl.text = f"Сьогодні: {format_day(today())}"
-        self.child_map = {"Уся група": ""}
+        self.day_map = recent_days()
+        self.day_spinner.values = list(self.day_map)
+        if self.day_spinner.text not in self.day_map:
+            self.day_spinner.text = next(iter(self.day_map))
+        self.child_map = {}
         for child in self.app.diary.children:
             label = child["name"]
             while label in self.child_map:
@@ -645,68 +667,272 @@ class RecordTab(Screen):
             self.child_map[label] = child["id"]
         self.child_spinner.values = list(self.child_map)
         if self.child_spinner.text not in self.child_map:
-            self.child_spinner.text = "Уся група"
+            self.child_spinner.text = ("Оберіть дитину" if self.child_map
+                                       else "Спершу додайте дітей на вкладці «Діти»")
+        self.refresh_periods()
+
+    def refresh_periods(self):
+        if not self.app.diary:
+            return
+        cid = self.child_id
+        next_title = None
+        for btn, (key, title, _, _) in zip(self.period_btns, PERIODS):
+            filled = bool(cid) and period_filled(self.app.diary.get_period(self.day, cid, key))
+            btn.text = f"{title}\n[size={int(FS_SMALL)}]{'заповнено' if filled else 'не заповнено'}[/size]"
+            btn.markup = True
+            btn._bg = PRIMARY if filled else CARD_LIGHT
+            btn._paint()
+            if not filled and next_title is None:
+                next_title = title
+        self.btn_next.text = f"Далі: {next_title}" if next_title else "Далі: переглянути день"
+
+    def open_period(self, index):
+        if not self.child_id:
+            show_message("Спершу оберіть дитину.")
+            return
+        self.app.open_period(self.day, self.child_id, index)
+
+    def go_next(self, *_):
+        if not self.child_id:
+            show_message("Спершу оберіть дитину.")
+            return
+        for i, (key, _, _, _) in enumerate(PERIODS):
+            if not period_filled(self.app.diary.get_period(self.day, self.child_id, key)):
+                self.open_period(i)
+                return
+        open_day_preview(self.day)
+
+
+# ----------------------------------------------------------------------
+# Екран одного режимного моменту з підказками, як у паперовій таблиці
+# ----------------------------------------------------------------------
+class PeriodScreen(Screen):
+    def __init__(self, app, **kw):
+        super().__init__(name="period", **kw)
+        self.app = app
+        self.day = today()
+        self.child_id = None
+        self.index = 0
+        self.undo = []
+        root = BoxLayout(orientation="vertical")
+        header = Panel(bg=PRIMARY, orientation="vertical", size_hint_y=None, height=dp(86),
+                       padding=[dp(16), dp(8)])
+        self.title = Label(font_size=sp(22), bold=True, halign="left", valign="middle",
+                           markup=True, shorten=True, shorten_from="right")
+        self.title.bind(size=lambda *_: setattr(self.title, "text_size", self.title.size))
+        header.add_widget(self.title)
+        root.add_widget(header)
+        self.body = BoxLayout()
+        root.add_widget(self.body)
+        nav = Panel(bg=CARD, orientation="horizontal", size_hint_y=None, height=BTN_H + dp(20),
+                    padding=dp(10), spacing=dp(8))
+        self.btn_back = Btn(text="Назад", bg=SECOND, on_release=lambda *_: self.go_back())
+        self.btn_save = Btn(text="Зберегти", bg=CARD_LIGHT, on_release=lambda *_: self.save_close())
+        self.btn_next = Btn(text="Далі", on_release=lambda *_: self.go_next())
+        for b in (self.btn_back, self.btn_save, self.btn_next):
+            nav.add_widget(b)
+        root.add_widget(nav)
+        self.add_widget(root)
+
+    def open(self, day, child_id, index):
+        self.day, self.child_id, self.index = day, child_id, index
+        self.build_form()
+
+    # --- побудова форми ---
+    def _toggles(self, col, options, selected, cols=2, height=None):
+        grid = GridLayout(cols=cols, spacing=dp(8), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        btns = []
+        for opt in options:
+            t = ToggleBtn(text=opt, font_size=FS_SMALL, height=height or BTN_H)
+            if opt in selected:
+                t.state = "down"
+            btns.append(t)
+            grid.add_widget(t)
+        col.add_widget(grid)
+        return btns
+
+    def _stepper(self, col, mode, value):
+        row = BoxLayout(orientation="horizontal", size_hint_y=None, height=BTN_H, spacing=dp(8))
+        lbl = Label(text=mode, font_size=FS, halign="left", valign="middle")
+        lbl.bind(size=lambda *_: setattr(lbl, "text_size", lbl.size))
+        row.add_widget(lbl)
+        minus = Btn(text="−", bg=SECOND, size_hint_x=None, width=dp(64), font_size=sp(26))
+        val = Label(text=str(value), font_size=sp(24), bold=True, size_hint_x=None, width=dp(56))
+        plus = Btn(text="+", bg=PRIMARY, size_hint_x=None, width=dp(64), font_size=sp(26))
+        minus.bind(on_release=lambda *_: setattr(val, "text", str(max(0, int(val.text) - 1))))
+        plus.bind(on_release=lambda *_: setattr(val, "text", str(min(99, int(val.text) + 1))))
+        row.add_widget(minus)
+        row.add_widget(val)
+        row.add_widget(plus)
+        col.add_widget(row)
+        return val
+
+    def build_form(self):
+        diary = self.app.diary
+        key, title, period_hint, options = PERIODS[self.index]
+        child = diary.get_child(self.child_id)
+        data = diary.get_period(self.day, self.child_id, key)
+        self.media = list(data["media"])
+        self.undo = []
+        sv, col = scroll_column()
+
+        col.add_widget(section("Короткий опис діяльності"))
+        col.add_widget(hint(period_hint))
+        self.activity_btns = self._toggles(col, options, data["activities"])
+        self.desc = make_input("Що робила дитина? Можна надиктувати...", multiline=True, height=dp(150))
+        self.desc.text = data["description"]
+        col.add_widget(self.desc)
+        row = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=BTN_H)
+        row.add_widget(Btn(text="Голос", bg=ACCENT, on_release=self.voice))
+        row.add_widget(Btn(text="Скасувати", bg=SECOND, font_size=FS_SMALL, on_release=self.undo_last))
+        row.add_widget(Btn(text="Стерти", bg=DANGER, on_release=self.clear_desc))
+        col.add_widget(row)
+
+        col.add_widget(spacer())
+        col.add_widget(section("Кількість виконаних завдань"))
+        self.task_vals = {m: self._stepper(col, m, data["tasks"].get(m, 0)) for m in TASK_MODES}
+
+        col.add_widget(spacer())
+        col.add_widget(section("Труднощі"))
+        self.diff = VoiceField("Що давалося важко?", multiline=True, height=dp(110))
+        self.diff.text = data["difficulties"]
+        col.add_widget(self.diff)
+
+        col.add_widget(spacer())
+        col.add_widget(section("Потреби"))
+        col.add_widget(hint("У допомозі асистента: навідні запитання, багаторазове повторення, "
+                            "більше наочності чи часу на виконання завдання"))
+        self.need_btns = self._toggles(col, NEEDS, data["needs"], height=dp(66))
+        self.needs_note = VoiceField("Інше (за потреби)")
+        self.needs_note.text = data["needs_note"]
+        col.add_widget(self.needs_note)
+
+        col.add_widget(spacer())
+        col.add_widget(section("Поведінка"))
+        col.add_widget(Lbl(text="Взаємодія з ровесниками"))
+        self.inter = VoiceField("Як дитина взаємодіяла з дітьми?", multiline=True, height=dp(110))
+        self.inter.text = data["interaction"]
+        col.add_widget(self.inter)
+        col.add_widget(Lbl(text="Ігрова діяльність"))
+        self.game_btns = self._toggles(col, GAMES, data["games"], cols=3)
+        self.games_note = VoiceField("Деталі гри (за потреби)")
+        self.games_note.text = data["games_note"]
+        col.add_widget(self.games_note)
+
+        col.add_widget(spacer())
+        col.add_widget(section("Фото та відео"))
+        mrow = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=BTN_H)
+        mrow.add_widget(Btn(text="Додати фото / відео", bg=SECOND, font_size=FS_SMALL, on_release=self.add_media))
+        mrow.add_widget(Btn(text="Прибрати всі", bg=SECOND, font_size=FS_SMALL, on_release=self.drop_media))
+        col.add_widget(mrow)
+        self.media_lbl = hint("")
+        col.add_widget(self.media_lbl)
+        self._update_media()
+        col.add_widget(spacer(dp(20)))
+
+        self.body.clear_widgets()
+        self.body.add_widget(sv)
+        name = escape_markup(child["name"]) if child else ""
+        self.title.text = (f"{title}\n[size={int(FS_SMALL)}]{name} · {format_day_short(self.day)} · "
+                           f"етап {self.index + 1} з {len(PERIODS)}[/size]")
+        self.btn_back.text = "До списку" if self.index == 0 else "Назад"
+        self.btn_next.text = "Завершити" if self.index == len(PERIODS) - 1 else "Далі"
 
     # --- текст ---
     def _remember(self):
-        self.undo.append(self.note.text)
+        self.undo.append(self.desc.text)
         del self.undo[:-30]
 
     def voice(self, *_):
-        self.app.voice_into(self.note, append=True, before=self._remember)
+        self.app.voice_into(self.desc, append=True, before=self._remember)
 
     def undo_last(self, *_):
         if self.undo:
-            self.note.text = self.undo.pop()
+            self.desc.text = self.undo.pop()
         else:
-            self.note.do_undo()
+            self.desc.do_undo()
 
-    def clear_note(self, *_):
-        if self.note.text:
+    def clear_desc(self, *_):
+        if self.desc.text:
             self._remember()
-            self.note.text = ""
+            self.desc.text = ""
 
     # --- медіа ---
     def add_media(self, *_):
         self.app.pick_media(self._media_added)
 
     def _media_added(self, names):
-        self.pending.extend(names)
+        self.media.extend(names)
         self._update_media()
 
     def drop_media(self, *_):
-        for name in self.pending:
-            try:
-                os.remove(os.path.join(self.app.diary.media_dir, name))
-            except OSError:
-                pass
-        self.pending = []
-        self._update_media()
+        if not self.media:
+            return
+
+        def do_drop():
+            for name in self.media:
+                try:
+                    os.remove(os.path.join(self.app.diary.media_dir, name))
+                except OSError:
+                    pass
+            self.media = []
+            self._update_media()
+            self.save()
+        confirm("Прибрати всі фото та відео цього етапу?", do_drop, "Прибрати")
 
     def _update_media(self):
-        n = len(self.pending)
-        self.media_lbl.text = (f"Додано до запису: {n} {plural(n, 'файл', 'файли', 'файлів')}"
-                               if n else "Файли не додано")
+        n = len(self.media)
+        self.media_lbl.text = (f"Додано: {n} {plural(n, 'файл', 'файли', 'файлів')}" if n
+                               else "Файли не додано")
 
-    # --- збереження ---
-    def save(self, *_):
-        criteria = [c for c, t in self.crit.items() if t.state == "down"]
-        child_id = self.child_map.get(self.child_spinner.text, "")
+    # --- збереження та навігація ---
+    def collect(self):
+        return {
+            "activities": [b.text for b in self.activity_btns if b.state == "down"],
+            "description": self.desc.text.strip(),
+            "tasks": {m: int(v.text) for m, v in self.task_vals.items()},
+            "difficulties": self.diff.text,
+            "needs": [b.text for b in self.need_btns if b.state == "down"],
+            "needs_note": self.needs_note.text,
+            "interaction": self.inter.text,
+            "games": [b.text for b in self.game_btns if b.state == "down"],
+            "games_note": self.games_note.text,
+            "media": list(self.media),
+        }
+
+    def save(self):
+        key = PERIODS[self.index][0]
         try:
-            rec = self.app.diary.add_record(child_id, criteria, self.note.text, self.pending)
-        except ValueError as e:
-            show_message(str(e))
-            return
+            self.app.diary.save_period(self.day, self.child_id, key, self.collect())
         except Exception as e:
-            show_message(f"Не вдалося зберегти запис:\n{e}")
+            show_message(f"Не вдалося зберегти:\n{e}")
+            return False
+        return True
+
+    def go_next(self):
+        if not self.save():
             return
-        self.note.text = ""
-        self.undo = []
-        self.pending = []
-        for t in self.crit.values():
-            t.state = "normal"
-        self._update_media()
-        show_message(f"Запис збережено о {rec['time']}.\nДитина: {rec['child_name']}")
+        if self.index < len(PERIODS) - 1:
+            self.index += 1
+            self.build_form()
+        else:
+            self.app.show_main()
+            show_message("Запис за день збережено.\nЙого можна переглянути або надіслати на вкладці «Запис».")
+
+    def go_back(self):
+        if not self.save():
+            return
+        if self.index > 0:
+            self.index -= 1
+            self.build_form()
+        else:
+            self.app.show_main()
+
+    def save_close(self):
+        if self.save():
+            self.app.show_main()
+            show_message(f"Збережено: {PERIODS[self.index][1]}.")
 
 
 class ChildrenTab(Screen):
@@ -746,9 +972,13 @@ class ArchiveTab(Screen):
         if not days:
             self.list_box.add_widget(hint("Записів ще немає. Збережіть перший запис на вкладці «Запис»."))
         for day, n in days:
-            self.list_box.add_widget(Btn(
-                text=f"{format_day(day)}\n{n} {plural(n, 'запис', 'записи', 'записів')}",
-                bg=CARD_LIGHT, height=dp(72), on_release=lambda *_, d=day: open_day_preview(d)))
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=dp(76), spacing=dp(8))
+            row.add_widget(Btn(
+                text=f"{format_day(day)}\n[size={int(FS_SMALL)}]{n} {plural(n, 'дитина', 'дитини', 'дітей')}[/size]",
+                markup=True, bg=CARD_LIGHT, height=dp(76), on_release=lambda *_, d=day: open_day_preview(d)))
+            row.add_widget(Btn(text="Надіслати", bg=ACCENT, size_hint_x=None, width=dp(124), height=dp(76),
+                               font_size=FS_SMALL, on_release=lambda *_, d=day: self.app.share_day(d)))
+            self.list_box.add_widget(row)
 
 
 class ReportsTab(Screen):
@@ -760,7 +990,7 @@ class ReportsTab(Screen):
         self.last_pdf = None
         sv, col = scroll_column()
         col.add_widget(Lbl(text="Звіт для батьків", font_size=sp(23), bold=True))
-        col.add_widget(hint("Усі спостереження, критерії розвитку та фото дитини за місяць "
+        col.add_widget(hint("Усі спостереження за режимними моментами та фото дитини за місяць "
                             "в одному PDF — готовому для надсилання у Viber чи Telegram. "
                             "Примітки про особливості дитини до звіту не потрапляють."))
         col.add_widget(section("Дитина"))
@@ -803,7 +1033,7 @@ class ReportsTab(Screen):
             show_message("Оберіть дитину та місяць.")
             return
         diary = self.app.diary
-        records = diary.child_month_records(child["id"], month)
+        records = diary.child_month_entries(child["id"], month)
         if not records:
             show_message(f"За {self.month_spinner.text} записів про «{child['name']}» немає.")
             return
@@ -820,6 +1050,7 @@ class ReportsTab(Screen):
         def done(result):
             self._reset_btn()
             self.last_pdf = result
+            ab.notify("Звіт для батьків готовий", name)
             self.result_box.add_widget(Lbl(text=f"Готово: {name}", color=GREEN_TEXT, bold=True))
             self.result_box.add_widget(Btn(text="Надіслати (Viber, Telegram…)", bg=ACCENT,
                                            on_release=lambda *_: self.app.share_file(
@@ -849,9 +1080,15 @@ class MainScreen(Screen):
 
         header = Panel(bg=PRIMARY, orientation="horizontal", size_hint_y=None, height=dp(72),
                        padding=[dp(14), dp(10)], spacing=dp(10))
-        self.header_lbl = Label(markup=True, font_size=FS, halign="left", valign="middle")
-        self.header_lbl.bind(size=lambda *_: setattr(self.header_lbl, "text_size", self.header_lbl.size))
-        header.add_widget(self.header_lbl)
+        texts = BoxLayout(orientation="vertical")
+        self.header_name = Label(font_size=FS, bold=True, halign="left", valign="middle",
+                                 shorten=True, shorten_from="right")
+        self.header_sub = Label(font_size=FS_SMALL, halign="left", valign="middle", color=(1, 1, 1, 0.85),
+                                shorten=True, shorten_from="right")
+        for lbl in (self.header_name, self.header_sub):
+            lbl.bind(size=lambda inst, *_: setattr(inst, "text_size", inst.size))
+            texts.add_widget(lbl)
+        header.add_widget(texts)
         header.add_widget(Btn(text="Меню", bg=darker(PRIMARY, 0.8), size_hint=(None, 1),
                               width=dp(96), on_release=lambda *_: self.open_menu()))
         root.add_widget(header)
@@ -877,8 +1114,8 @@ class MainScreen(Screen):
     def refresh_header(self):
         p = self.app.diary.profile
         sub = " · ".join(x for x in (p["role"], self.app.diary.group_title) if x)
-        self.header_lbl.text = (f"[b]{escape_markup(p['full_name'] or 'Щоденник')}[/b]\n"
-                                f"[size={int(FS_SMALL)}]{escape_markup(sub)}[/size]")
+        self.header_name.text = p["full_name"] or "Щоденник спостережень"
+        self.header_sub.text = sub
 
     def select(self, key):
         for k, b in self.nav_btns.items():
@@ -934,7 +1171,11 @@ class DiaryApp(App):
         self.sm.add_widget(self.wizard)
         self.main = MainScreen(self)
         self.sm.add_widget(self.main)
+        self.period = PeriodScreen(self)
+        self.sm.add_widget(self.period)
         self.sm.current = "login"
+        # Запит усіх дозволів одразу після встановлення (при першому запуску)
+        Clock.schedule_once(lambda dt: ab.request_startup_permissions(), 1.0)
         return self.sm
 
     # --- обліковий запис ---
@@ -955,6 +1196,13 @@ class DiaryApp(App):
         self.main.refresh_header()
         self.sm.current = "main"
         self.main.select("record")
+
+    def open_period(self, day, child_id, index):
+        if not self.diary.get_child(child_id):
+            show_message("Цієї дитини вже немає у списку групи.")
+            return
+        self.period.open(day, child_id, index)
+        self.sm.current = "period"
 
     def logout(self):
         self.diary = None
@@ -1073,6 +1321,13 @@ class DiaryApp(App):
             ab.share(target, mime)
         self._with_storage(lambda: self.run_bg(work))
 
+    def share_day(self, day):
+        path = self.diary.excel_path(day)
+        if not os.path.exists(path):
+            show_message(f"За {format_day(day)} записів ще немає.")
+            return
+        self.share_file(path, f"{EXPORT_ROOT}/Таблиці", XLSX_MIME)
+
     def export_all(self):
         diary = self.diary
         stamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -1091,6 +1346,7 @@ class DiaryApp(App):
             if not any(c.values()):
                 show_message("Поки що немає файлів для експорту.")
                 return
+            ab.notify("Експорт завершено", f"Файли в «Завантаження/{base}»")
             show_message(f"Скопійовано в «Завантаження/{base}»:\n"
                          f"таблиць — {c['Таблиці']}, медіафайлів — {c['Медіа']}, звітів — {c['Звіти']}")
         self._with_storage(lambda: self.run_bg(work, done))
@@ -1108,6 +1364,9 @@ class DiaryApp(App):
             return True
         if current == "wizard":
             self.wizard.go_back()
+            return True
+        if current == "period":
+            self.period.go_back()
             return True
         if current == "main" and self.main.current_tab != "record":
             self.main.select("record")
