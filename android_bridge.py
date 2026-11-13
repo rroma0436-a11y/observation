@@ -13,6 +13,8 @@ IS_ANDROID = platform == "android"
 
 REQUEST_SPEECH = 101
 REQUEST_MEDIA = 102
+REQUEST_PHOTO = 103
+REQUEST_VIDEO = 104
 RESULT_OK = -1
 
 if IS_ANDROID:
@@ -88,6 +90,59 @@ def pick_media():
         pass
     intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, True)
     _activity_obj().startActivityForResult(intent, REQUEST_MEDIA)
+
+
+_photo_uri = [None]
+
+
+def has_camera_permission():
+    return (not IS_ANDROID) or check_permission("android.permission.CAMERA")
+
+
+def request_camera_permission(callback):
+    """callback(granted: bool) викликається з іншого потоку."""
+    request_permissions(["android.permission.CAMERA"],
+                        lambda perms, grants: callback(bool(grants) and all(grants)))
+
+
+def take_photo():
+    """Відкриває камеру. Фото зберігається також у галерею (Pictures/Shodennyk)."""
+    MediaStore = autoclass("android.provider.MediaStore")
+    Images = autoclass("android.provider.MediaStore$Images$Media")
+    resolver = _activity_obj().getContentResolver()
+    values = ContentValues()
+    values.put("_display_name", f"shodennyk_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
+    values.put("mime_type", "image/jpeg")
+    if SDK_INT >= 29:
+        values.put("relative_path", "Pictures/Shodennyk")
+    uri = resolver.insert(Images.EXTERNAL_CONTENT_URI, values)
+    if uri is None:
+        raise RuntimeError("Не вдалося підготувати місце для фото")
+    intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+    intent.putExtra(MediaStore.EXTRA_OUTPUT, cast("android.os.Parcelable", uri))
+    intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    _photo_uri[0] = uri
+    _activity_obj().startActivityForResult(intent, REQUEST_PHOTO)
+
+
+def photo_result(ok):
+    """Повертає Uri знятого фото або None (порожній запис у галереї видаляється)."""
+    uri, _photo_uri[0] = _photo_uri[0], None
+    if uri is None:
+        return None
+    if ok:
+        return uri
+    try:
+        _activity_obj().getContentResolver().delete(uri, None, None)
+    except Exception:
+        pass
+    return None
+
+
+def take_video():
+    MediaStore = autoclass("android.provider.MediaStore")
+    intent = Intent(MediaStore.ACTION_VIDEO_CAPTURE)
+    _activity_obj().startActivityForResult(intent, REQUEST_VIDEO)
 
 
 def uris_from_result(intent):
