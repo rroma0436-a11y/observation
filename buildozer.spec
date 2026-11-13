@@ -18,8 +18,8 @@ source.dir = .
 # (string) Version of the application
 version = 1.0
 
-# (list) Application requirements (включно з openpyxl для Excel)
-requirements = python3,kivy,setuptools,plyer,openpyxl
+# (list) Application requirements (включно з openpyxl та et_xmlfile для Excel)
+requirements = python3,kivy,setuptools,plyer,openpyxl,et_xmlfile
 
 # (str) Icon of the application
 icon.filename = %(source.dir)s/icon.png
@@ -62,9 +62,3 @@ android.release_keyalias = observation_alias
 android.release_artifact = apk
 
 [buildozer]
-
-# (int) Log level (0 = error, 1 = info, 2 = debug (with command output))
-log_level = 2
-
-# (int) Display warning if buildozer is run as root (0 = False, 1 = True)
-warn_root = 1
