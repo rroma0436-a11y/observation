@@ -39,6 +39,19 @@ jobs:
         pip install --upgrade pip
         pip install cython==0.29.36 buildozer
 
+    - name: Install Android SDK Build-Tools and Accept Licenses
+      run: |
+        export ANDROID_HOME=/usr/local/lib/android/sdk
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools
+        
+        # Створюємо необхідні директорії
+        mkdir -p ~/.android
+        touch ~/.android/repositories.cfg
+
+        # Встановлюємо правильні build-tools, де є aidl, та приймаємо ліцензії
+        yes | sdkmanager --sdk_root=${ANDROID_HOME} --licenses || true
+        sdkmanager --sdk_root=${ANDROID_HOME} "platform-tools" "build-tools;34.0.0" "platforms;android-34"
+
     - name: Build with Buildozer
       run: |
         export ANDROID_HOME=/usr/local/lib/android/sdk
