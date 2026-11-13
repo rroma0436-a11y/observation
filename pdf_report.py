@@ -7,8 +7,8 @@
 import os
 from datetime import datetime
 
-from storage import (CRITERIA, IMAGE_EXT, VIDEO_EXT, format_day, format_day_short,
-                     format_month, plural)
+from storage import (GAMES, IMAGE_EXT, NEEDS, PERIODS, TASK_MODES, VIDEO_EXT, format_day,
+                     format_day_short, format_month, period_filled, period_lines, plural)
 
 PAGE_W, PAGE_H = 595.0, 842.0  # A4 у пунктах
 M = 46.0                       # поля
@@ -34,7 +34,6 @@ class AndroidBackend:
         self.Paint = autoclass("android.graphics.Paint")
         self.PaintStyle = autoclass("android.graphics.Paint$Style")
         self.Typeface = autoclass("android.graphics.Typeface")
-        self.Color = autoclass("android.graphics.Color")
         self.BitmapFactory = autoclass("android.graphics.BitmapFactory")
         self.BitmapOptions = autoclass("android.graphics.BitmapFactory$Options")
         self.Bitmap = autoclass("android.graphics.Bitmap")
@@ -62,7 +61,8 @@ class AndroidBackend:
         p = self.paint
         p.setTextSize(float(size))
         p.setTypeface(self.Typeface.DEFAULT_BOLD if bold else self.Typeface.DEFAULT)
-        p.setColor(self.Color.rgb(int(color[0]), int(color[1]), int(color[2])))
+        # setARGB має лише один варіант — без плутанини між setColor(int) і setColor(long)
+        p.setARGB(255, int(color[0]), int(color[1]), int(color[2]))
         p.setStyle(self.PaintStyle.FILL if fill else self.PaintStyle.STROKE)
         p.setStrokeWidth(float(stroke))
         return p
@@ -265,8 +265,27 @@ class Layout:
         self.y += 10
 
 
-def build_report(backend, out_path, child, month, profile, records, media_dir):
-    """records: список (day, record) за місяць для цієї дитини."""
+def _bars(lay, rows, label_w=190):
+    """Горизонтальні смуги: rows = [(назва, число)]."""
+    be = lay.be
+    top = max([n for _, n in rows] + [1])
+    bar_x, bar_w = M + label_w, CONTENT_W - label_w - 40
+    for label, n in rows:
+        lines = lay.wrap(label, 10.5, False, label_w - 10)
+        h = max(22, len(lines) * 14 + 6)
+        lay.ensure(h)
+        for i, line in enumerate(lines):
+            be.text(M, lay.y + 2 + i * 14, line, 10.5, False, DARK)
+        be.rect(bar_x, lay.y + 3, bar_w, 11, LIGHT)
+        if n:
+            be.rect(bar_x, lay.y + 3, bar_w * n / top, 11, GREEN)
+        be.text(bar_x + bar_w + 10, lay.y + 2, str(n), 11, True, DARK)
+        lay.y += h
+    lay.y += 4
+
+
+def build_report(backend, out_path, child, month, profile, entries, media_dir):
+    """entries: список (day, entry) за місяць для цієї дитини."""
     month_label = format_month(month)
     lay = Layout(backend, f"Щоденник спостережень · {child['name']} · {month_label}")
     be = backend
@@ -297,58 +316,69 @@ def build_report(backend, out_path, child, month, profile, records, media_dir):
         y += 22
     lay.y += card_h + 8
 
-    # --- підсумок ---
+    # --- збір статистики ---
     images, others = [], []
-    for day, r in records:
-        for name in r.get("media", []):
-            path = os.path.join(media_dir, name)
-            if not os.path.exists(path):
-                continue
-            if name.lower().endswith(IMAGE_EXT):
-                images.append((day, path))
-            else:
-                others.append((day, name))
+    tasks = {m: 0 for m in TASK_MODES}
+    needs = {n: 0 for n in NEEDS}
+    games = {g: 0 for g in GAMES}
+    for day, e in entries:
+        for p in e["periods"].values():
+            for m in TASK_MODES:
+                tasks[m] += int(p.get("tasks", {}).get(m, 0) or 0)
+            for n in p.get("needs", []):
+                needs[n] = needs.get(n, 0) + 1
+            for g in p.get("games", []):
+                games[g] = games.get(g, 0) + 1
+            for name in p.get("media", []):
+                path = os.path.join(media_dir, name)
+                if not os.path.exists(path):
+                    continue
+                if name.lower().endswith(IMAGE_EXT):
+                    images.append((day, path))
+                else:
+                    others.append((day, name))
 
     lay.heading("Підсумок місяця")
-    n = len(records)
+    n = len(entries)
     if n == 0:
         lay.paragraph("За цей місяць записів про дитину ще немає.", 11.5)
     else:
-        lay.paragraph(f"За місяць педагог зробив {n} {plural(n, 'спостереження', 'спостереження', 'спостережень')}"
-                      f", додано {len(images)} {plural(len(images), 'фото', 'фото', 'фото')}"
-                      + (f" і {len(others)} {plural(len(others), 'інший медіафайл', 'інші медіафайли', 'інших медіафайлів')}."
-                         if others else "."), 11.5)
-        counts = {c: sum(1 for _, r in records if c in r.get("criteria", [])) for c in CRITERIA}
-        top = max(counts.values()) or 1
-        bar_x, bar_w = M + 150, CONTENT_W - 190
-        for c in CRITERIA:
-            lay.ensure(24)
-            be.text(M, lay.y + 2, c, 11, False, DARK)
-            be.rect(bar_x, lay.y + 3, bar_w, 11, LIGHT)
-            if counts[c]:
-                be.rect(bar_x, lay.y + 3, bar_w * counts[c] / top, 11, GREEN)
-            be.text(bar_x + bar_w + 10, lay.y + 2, str(counts[c]), 11, True, DARK)
-            lay.y += 22
-        lay.y += 4
+        total = sum(tasks.values())
+        lay.paragraph(f"Спостереження велися {n} {plural(n, 'день', 'дні', 'днів')}. "
+                      f"Виконано завдань: {total}"
+                      + (f", додано {len(images)} фото." if images else "."), 11.5)
+        if total:
+            lay.paragraph("Як дитина виконувала завдання", 11.5, True, GREEN, after=6)
+            _bars(lay, [(m, tasks[m]) for m in TASK_MODES])
+        if any(needs.values()):
+            lay.paragraph("Яка допомога була потрібна (скільки разів)", 11.5, True, GREEN, after=6)
+            _bars(lay, [(k, v) for k, v in needs.items() if v])
+        if any(games.values()):
+            lay.paragraph("Ігрова діяльність (скільки разів)", 11.5, True, GREEN, after=6)
+            _bars(lay, [(k, v) for k, v in games.items() if v])
 
-    # --- спостереження ---
-    if records:
-        lay.heading("Спостереження")
-        for day, r in records:
-            lay.ensure(56)
-            be.text(M, lay.y, f"{format_day_short(day)}, {r['time']}", 11.5, True, DARK)
-            lay.y += 18
-            if r.get("criteria"):
-                lay.paragraph(" · ".join(r["criteria"]), 10.5, True, GREEN, after=2)
-            if r.get("note"):
-                lay.paragraph(r["note"], 11, after=2)
-            media_n = len(r.get("media", []))
-            if media_n:
-                lay.paragraph(f"Медіафайлів: {media_n}", 9.5, False, GREY, after=0)
-            lay.y += 6
-            lay.ensure(10)
-            be.line(M, lay.y, M + CONTENT_W, lay.y, LINE, 0.6)
-            lay.y += 10
+    # --- спостереження по днях ---
+    if entries:
+        lay.heading("Спостереження по днях")
+        for day, e in entries:
+            lay.ensure(70)
+            lay.be.rect(M, lay.y, CONTENT_W, 22, LIGHT)
+            be.text(M + 8, lay.y + 5, format_day(day), 12, True, DARK)
+            lay.y += 30
+            for key, title, _, _ in PERIODS:
+                p = e["periods"].get(key)
+                if not period_filled(p):
+                    continue
+                lay.ensure(40)
+                be.text(M, lay.y, title, 11.5, True, GREEN)
+                lay.y += 18
+                for label, value in period_lines(p):
+                    lay.paragraph(f"{label}: {value}", 10.5, indent=10, after=1)
+                media_n = len(p.get("media", []))
+                if media_n:
+                    lay.paragraph(f"Фото/відео: {media_n}", 9.5, False, GREY, indent=10, after=0)
+                lay.y += 6
+            lay.y += 4
 
     # --- фото ---
     if images:
@@ -382,11 +412,8 @@ def build_report(backend, out_path, child, month, profile, records, media_dir):
             lay.y += row_h + 8
 
     if others:
-        lay.heading("Відео та аудіо")
-        videos = sum(1 for _, name in others if name.lower().endswith(VIDEO_EXT))
-        rest = len(others) - videos
-        summary = f"Відеозаписів: {videos}" + (f", аудіо та інших файлів: {rest}" if rest else "")
-        lay.paragraph(summary + ". Ці матеріали можна отримати у вихователя.", 11)
+        lay.heading("Відео та інші файли")
+        lay.paragraph(f"Файлів: {len(others)}. Ці матеріали можна отримати у педагога.", 11)
         for day, name in others:
             lay.paragraph(f"{format_day_short(day)} — {name}", 10, False, GREY, indent=10, after=0)
 
@@ -397,6 +424,6 @@ def build_report(backend, out_path, child, month, profile, records, media_dir):
     return out_path
 
 
-def generate(out_path, child, month, profile, records, media_dir, android=False):
+def generate(out_path, child, month, profile, entries, media_dir, android=False):
     backend = AndroidBackend() if android else ReportLabBackend(out_path)
-    return build_report(backend, out_path, child, month, profile, records, media_dir)
+    return build_report(backend, out_path, child, month, profile, entries, media_dir)
