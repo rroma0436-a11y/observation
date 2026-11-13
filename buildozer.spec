@@ -54,8 +54,9 @@ android.accept_sdk_license = True
 # (bool) Enable AndroidX support
 android.androidx = True
 
-# (list) The Android archs to build for (64-біт + 32-біт для старих телефонів)
-android.archs = arm64-v8a, armeabi-v7a
+# (list) The Android archs to build for
+# Лише одна архітектура: поточний python-for-android ламає pip, коли збирає дві архітектури поспіль
+android.archs = arm64-v8a
 
 # (bool) Use --private data storage (True) or --dir public storage (False)
 android.private_storage = True
