@@ -41,9 +41,11 @@ jobs:
 
     - name: Build with Buildozer
       run: |
-        mkdir -p ~/.android
-        touch ~/.android/repositories.cfg
-        yes | buildozer -v android release
+        export ANDROID_HOME=/usr/local/lib/android/sdk
+        export ANDROIDSDK=/usr/local/lib/android/sdk
+        export ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        buildozer -v android release
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
