@@ -28,9 +28,15 @@ if IS_ANDROID:
     Environment = autoclass("android.os.Environment")
     JFile = autoclass("java.io.File")
     Uri = autoclass("android.net.Uri")
+    JString = autoclass("java.lang.String")
     SDK_INT = autoclass("android.os.Build$VERSION").SDK_INT
 else:
     SDK_INT = 0
+
+
+def cs(text):
+    """Python-рядок -> Java CharSequence (потрібно для заголовків вікон і сповіщень)."""
+    return cast("java.lang.CharSequence", JString(text))
 
 
 def detach():
@@ -190,5 +196,65 @@ def share(target, mime, title="Надіслати"):
     intent.setType(mime)
     intent.putExtra(Intent.EXTRA_STREAM, cast("android.os.Parcelable", uri))
     intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-    chooser = Intent.createChooser(intent, title)
+    chooser = Intent.createChooser(intent, cs(title))
     _activity_obj().startActivity(chooser)
+
+
+# ----------------------------------------------------------------------
+# Дозволи при першому запуску
+# ----------------------------------------------------------------------
+def startup_permissions():
+    """Список дозволів, які застосунок запитує одразу після встановлення."""
+    perms = ["android.permission.RECORD_AUDIO", "android.permission.CAMERA"]
+    if SDK_INT >= 33:
+        perms += ["android.permission.POST_NOTIFICATIONS",
+                  "android.permission.READ_MEDIA_IMAGES",
+                  "android.permission.READ_MEDIA_VIDEO"]
+    else:
+        perms.append("android.permission.READ_EXTERNAL_STORAGE")
+        if SDK_INT < 29:
+            perms.append("android.permission.WRITE_EXTERNAL_STORAGE")
+    return perms
+
+
+def request_startup_permissions():
+    if not IS_ANDROID:
+        return
+    missing = [p for p in startup_permissions() if not check_permission(p)]
+    if missing:
+        request_permissions(missing)
+
+
+# ----------------------------------------------------------------------
+# Сповіщення
+# ----------------------------------------------------------------------
+_CHANNEL = "diary_main"
+_notify_id = [1000]
+
+
+def notify(title, text):
+    """Показує сповіщення в шторці телефону. Помилки ігноруються."""
+    if not IS_ANDROID:
+        return
+    try:
+        Context = autoclass("android.content.Context")
+        NotificationManager = autoclass("android.app.NotificationManager")
+        Builder = autoclass("android.app.Notification$Builder")
+        act = _activity_obj()
+        nm = cast("android.app.NotificationManager",
+                  act.getSystemService(Context.NOTIFICATION_SERVICE))
+        if SDK_INT >= 26:
+            Channel = autoclass("android.app.NotificationChannel")
+            nm.createNotificationChannel(
+                Channel(_CHANNEL, cs("Щоденник спостережень"), NotificationManager.IMPORTANCE_DEFAULT))
+            builder = Builder(act, _CHANNEL)
+        else:
+            builder = Builder(act)
+        builder.setSmallIcon(act.getApplicationInfo().icon)
+        builder.setContentTitle(cs(title))
+        builder.setContentText(cs(text))
+        builder.setAutoCancel(True)
+        _notify_id[0] += 1
+        nm.notify(_notify_id[0], builder.build())
+    except Exception:
+        pass
