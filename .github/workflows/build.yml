@@ -83,7 +83,8 @@ jobs:
         P4A_RELEASE_KEYSTORE: ${{ runner.temp }}/release.keystore
         P4A_RELEASE_KEYSTORE_PASSWD: ${{ secrets.KEYSTORE_PASSWORD }}
         P4A_RELEASE_KEYALIAS: observation_alias
-        P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD }}
+        # Якщо окремого пароля ключа немає — використовується пароль сховища
+        P4A_RELEASE_KEYALIAS_PASSWD: ${{ secrets.KEY_PASSWORD || secrets.KEYSTORE_PASSWORD }}
       run: |
         buildozer -v android release
 
