@@ -46,7 +46,7 @@ android.minapi = 26
 android.sdk = 34
 
 # (str) Android NDK version to use
-android.ndk = 27.3.13750724
+android.ndk = 25b
 
 # (str) The Android arch to build for (Додано arm64-v8a для сучасних 64-бітних пристроїв)
 android.archs = armeabi-v7a, arm64-v8a
