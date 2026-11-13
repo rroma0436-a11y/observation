@@ -39,14 +39,13 @@ jobs:
         pip install --upgrade pip
         pip install cython==0.29.36 buildozer
 
-    - name: Accept Licenses and Build with Buildozer
+    - name: Build with Buildozer using preinstalled SDK/NDK
       run: |
-        mkdir -p ~/.android
-        touch ~/.android/repositories.cfg
-        # Автоматично відповідаємо 'y' на будь-які запити ліцензій під час збірки
-        yes | buildozer -v android release || true
-        # Повторний запуск на випадок перерваного потоку, щоб точно завершити збірку
-        buildozer -v android release
+        export ANDROID_HOME=/usr/local/lib/android/sdk
+        export ANDROIDSDK=/usr/local/lib/android/sdk
+        export ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        yes | buildozer -v android release
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
