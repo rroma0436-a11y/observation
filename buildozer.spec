@@ -49,7 +49,7 @@ android.sdk = 34
 android.ndk = 25b
 
 # (str) The Android arch to build for (Додано arm64-v8a для сучасних 64-бітних пристроїв)
-android.archs = armeabi-v7a, arm64-v8a
+android.archs = arm64-v8a
 
 # (bool) Use --private data storage (True) or public storage (False)
 android.private_storage = True
