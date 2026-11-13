@@ -14,7 +14,26 @@ import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
 
 ROLES = ["Вихователь", "Асистент вихователя", "Помічник вихователя"]
-CRITERIA = ["Мовлення", "Соціалізація", "Дрібна моторика", "Фізична активність"]
+ROLE_GENITIVE = {"Вихователь": "вихователя", "Асистент вихователя": "асистента вихователя",
+                 "Помічник вихователя": "помічника вихователя"}
+
+# Режимні моменти — як у паперовій формі щоденника.
+# (ключ, назва, підказка, швидкі варіанти діяльності)
+PERIODS = [
+    ("morning", "Ранок", "Ранкова гімнастика, спостереження, бесіди, доручення",
+     ["Ранкова гімнастика", "Спостереження", "Бесіди", "Доручення"]),
+    ("education", "Освітня діяльність", "Заняття, освітні ситуації, індивідуальна робота",
+     ["Заняття", "Індивідуальна робота", "Творча діяльність", "Музичне заняття"]),
+    ("walk", "Прогулянка", "Спостереження в природі, рухливі ігри, трудові доручення",
+     ["Спостереження в природі", "Рухливі ігри", "Трудові доручення", "Вільна гра"]),
+    ("free", "Самостійна діяльність", "Ігри, малювання, конструювання за власним вибором",
+     ["Ігри", "Малювання", "Конструювання", "Книжки"]),
+]
+PERIOD_TITLES = {key: title for key, title, _, _ in PERIODS}
+TASK_MODES = ["Самостійно", "З допомогою", "За зразком"]
+NEEDS = ["Допомога в навідних запитаннях", "Багаторазове повторення",
+         "Більше наочності", "Більше часу на виконання"]
+GAMES = ["Рухлива", "Дидактична", "Сюжетно-рольова"]
 
 MONTHS_NOM = ["січень", "лютий", "березень", "квітень", "травень", "червень",
               "липень", "серпень", "вересень", "жовтень", "листопад", "грудень"]
@@ -23,9 +42,6 @@ MONTHS_GEN = ["січня", "лютого", "березня", "квітня", "�
 
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp")
 VIDEO_EXT = (".mp4", ".3gp", ".mkv", ".webm", ".mov")
-
-ALL_GROUP_ID = ""  # запис для всієї групи
-
 
 # ----------------------------------------------------------------------
 # Допоміжні функції
@@ -150,6 +166,56 @@ class UserStore:
 
 
 # ----------------------------------------------------------------------
+# Дані одного режимного моменту
+# ----------------------------------------------------------------------
+def empty_period():
+    return {"activities": [], "description": "", "tasks": {m: 0 for m in TASK_MODES},
+            "difficulties": "", "needs": [], "needs_note": "", "interaction": "",
+            "games": [], "games_note": "", "media": []}
+
+
+def period_filled(p):
+    if not p:
+        return False
+    return bool(p.get("activities") or p.get("description", "").strip()
+                or any(p.get("tasks", {}).values()) or p.get("difficulties", "").strip()
+                or p.get("needs") or p.get("needs_note", "").strip()
+                or p.get("interaction", "").strip() or p.get("games")
+                or p.get("games_note", "").strip() or p.get("media"))
+
+
+def join_text(items, note=""):
+    parts = list(items) + ([note.strip()] if note and note.strip() else [])
+    return "; ".join(parts)
+
+
+def tasks_text(tasks):
+    return ", ".join(f"{m.lower()} — {tasks.get(m, 0)}" for m in TASK_MODES if tasks.get(m, 0))
+
+
+def period_lines(p):
+    """Короткий текстовий опис етапу: список (назва поля, значення)."""
+    out = []
+    desc = join_text(p.get("activities", []), p.get("description", ""))
+    if desc:
+        out.append(("Діяльність", desc))
+    t = tasks_text(p.get("tasks", {}))
+    if t:
+        out.append(("Виконані завдання", t))
+    if p.get("difficulties", "").strip():
+        out.append(("Труднощі", p["difficulties"].strip()))
+    needs = join_text(p.get("needs", []), p.get("needs_note", ""))
+    if needs:
+        out.append(("Потреби", needs))
+    if p.get("interaction", "").strip():
+        out.append(("Взаємодія з ровесниками", p["interaction"].strip()))
+    games = join_text(p.get("games", []), p.get("games_note", ""))
+    if games:
+        out.append(("Ігрова діяльність", games))
+    return out
+
+
+# ----------------------------------------------------------------------
 # Щоденник одного педагога
 # ----------------------------------------------------------------------
 class Diary:
@@ -158,8 +224,8 @@ class Diary:
         self.media_dir = os.path.join(user_dir, "media")
         self.excel_dir = os.path.join(user_dir, "excel")
         self.reports_dir = os.path.join(user_dir, "reports")
-        self.records_dir = os.path.join(user_dir, "records")
-        for d in (self.media_dir, self.excel_dir, self.reports_dir, self.records_dir):
+        self.entries_dir = os.path.join(user_dir, "entries")
+        for d in (self.media_dir, self.excel_dir, self.reports_dir, self.entries_dir):
             os.makedirs(d, exist_ok=True)
         self.profile_path = os.path.join(user_dir, "profile.json")
         self.profile = _read_json(self.profile_path, {})
@@ -213,59 +279,71 @@ class Diary:
         self.profile["children"] = [c for c in self.profile["children"] if c["id"] != child_id]
         self.save_profile()
 
-    # --- записи ---
+    # --- записи: один запис = одна дитина за один день, 4 режимні моменти ---
     def _day_path(self, day):
-        return os.path.join(self.records_dir, f"{day}.json")
+        return os.path.join(self.entries_dir, f"{day}.json")
 
-    def records(self, day):
+    def entries(self, day):
         return _read_json(self._day_path(day), [])
 
-    def add_record(self, child_id, criteria, note, media, day=None):
-        day = day or today()
-        if not note.strip() and not criteria and not media:
-            raise ValueError("Додайте текст спостереження, критерій або медіафайл.")
-        child = self.get_child(child_id) if child_id else None
-        rec = {
-            "id": uuid.uuid4().hex[:10],
-            "time": datetime.now().strftime("%H:%M"),
-            "child_id": child["id"] if child else ALL_GROUP_ID,
-            "child_name": child["name"] if child else "Уся група",
-            "criteria": [c for c in CRITERIA if c in criteria],
-            "note": note.strip(),
-            "media": list(media),
-        }
-        recs = self.records(day)
-        recs.append(rec)
-        _write_json(self._day_path(day), recs)
+    def _save_day(self, day, entries):
+        entries = [e for e in entries if any(period_filled(p) for p in e["periods"].values())]
+        if entries:
+            _write_json(self._day_path(day), entries)
+        elif os.path.exists(self._day_path(day)):
+            os.remove(self._day_path(day))
         self.write_day_excel(day)
-        return rec
 
-    def delete_record(self, day, rec_id):
-        recs = self.records(day)
-        removed = [r for r in recs if r["id"] == rec_id]
-        recs = [r for r in recs if r["id"] != rec_id]
-        for r in removed:
-            for name in r.get("media", []):
-                try:
-                    os.remove(os.path.join(self.media_dir, name))
-                except OSError:
-                    pass
-        if recs:
-            _write_json(self._day_path(day), recs)
+    def get_entry(self, day, child_id):
+        for e in self.entries(day):
+            if e["child_id"] == child_id:
+                return e
+        return None
+
+    def get_period(self, day, child_id, key):
+        e = self.get_entry(day, child_id)
+        data = empty_period()
+        if e and key in e["periods"]:
+            data.update(e["periods"][key])
+            data["tasks"] = {**empty_period()["tasks"], **e["periods"][key].get("tasks", {})}
+        return data
+
+    def save_period(self, day, child_id, key, data):
+        child = self.get_child(child_id)
+        if child is None:
+            raise ValueError("Оберіть дитину.")
+        entries = self.entries(day)
+        entry = next((e for e in entries if e["child_id"] == child_id), None)
+        if entry is None:
+            entry = {"id": uuid.uuid4().hex[:10], "child_id": child_id, "periods": {}}
+            entries.append(entry)
+        entry["child_name"] = child["name"]
+        entry["updated"] = datetime.now().strftime("%H:%M")
+        if period_filled(data):
+            entry["periods"][key] = data
         else:
-            try:
-                os.remove(self._day_path(day))
-            except OSError:
-                pass
-        self.write_day_excel(day)
+            entry["periods"].pop(key, None)
+        self._save_day(day, entries)
+
+    def delete_entry(self, day, entry_id):
+        entries = self.entries(day)
+        for e in entries:
+            if e["id"] == entry_id:
+                for p in e["periods"].values():
+                    for name in p.get("media", []):
+                        try:
+                            os.remove(os.path.join(self.media_dir, name))
+                        except OSError:
+                            pass
+        self._save_day(day, [e for e in entries if e["id"] != entry_id])
 
     def days(self):
-        """Список (день, кількість записів), найновіші першими."""
+        """Список (день, кількість дітей із записами), найновіші першими."""
         out = []
-        for name in os.listdir(self.records_dir):
+        for name in os.listdir(self.entries_dir):
             if name.endswith(".json"):
                 day = name[:-5]
-                n = len(self.records(day))
+                n = len(self.entries(day))
                 if n:
                     out.append((day, n))
         return sorted(out, reverse=True)
@@ -275,24 +353,31 @@ class Diary:
         months.add(today()[:7])
         return sorted(months, reverse=True)
 
-    def child_month_records(self, child_id, month):
-        """Записи дитини за місяць: список (day, record) у хронологічному порядку."""
+    def child_month_entries(self, child_id, month):
+        """Записи дитини за місяць: список (day, entry) у хронологічному порядку."""
         out = []
         for day, _ in sorted(self.days()):
             if day.startswith(month):
-                for r in self.records(day):
-                    if r.get("child_id") == child_id:
-                        out.append((day, r))
+                e = self.get_entry(day, child_id)
+                if e:
+                    out.append((day, e))
         return out
 
-    # --- Excel ---
+    # --- Excel у формі паперового щоденника ---
     def excel_path(self, day):
         return os.path.join(self.excel_dir, f"schodennik_{day}.xlsx")
 
+    @property
+    def diary_title(self):
+        who = ROLE_GENITIVE.get(self.profile.get("role", ""), "педагога")
+        return f"Щоденник спостережень {who} ЗДО за дитиною з ООП"
+
     def write_day_excel(self, day):
+        from openpyxl.styles import Border, Side
+        from openpyxl.utils import get_column_letter
         path = self.excel_path(day)
-        recs = self.records(day)
-        if not recs:
+        entries = sorted(self.entries(day), key=lambda e: e["child_name"].lower())
+        if not entries:
             if os.path.exists(path):
                 os.remove(path)
             return None
@@ -300,37 +385,86 @@ class Diary:
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = day
-
-        headers = ["№", "Час", "Дитина"] + CRITERIA + ["Спостереження", "Медіафайли"]
-        last_col = openpyxl.utils.get_column_letter(len(headers))
-
-        ws["A1"] = f"Щоденник спостережень — {format_day(day)}"
-        ws["A1"].font = Font(bold=True, size=14)
-        ws.merge_cells(f"A1:{last_col}1")
-        ws["A2"] = (f"Педагог: {self.profile['full_name']} ({self.profile['role']})"
-                    f"    Група: {self.group_title}")
-        ws.merge_cells(f"A2:{last_col}2")
-
-        ws.append([])
-        ws.append(headers)
+        ncols = 12
+        last = get_column_letter(ncols)
+        thin = Side(style="thin", color="7F8C8D")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
         head_fill = PatternFill("solid", fgColor="2E7D60")
-        for cell in ws[4]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = head_fill
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        sub_fill = PatternFill("solid", fgColor="D9EAD3")
+        wrap_top = Alignment(vertical="top", wrap_text=True)
+        center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-        for i, r in enumerate(recs, start=1):
-            ws.append([i, r["time"], r["child_name"]]
-                      + ["✓" if c in r["criteria"] else "" for c in CRITERIA]
-                      + [r["note"], ", ".join(r.get("media", []))])
-            for cell in ws[ws.max_row]:
-                cell.alignment = Alignment(vertical="top", wrap_text=True)
-            for col in range(4, 4 + len(CRITERIA)):
-                ws.cell(row=ws.max_row, column=col).alignment = Alignment(horizontal="center", vertical="top")
+        ws["A1"] = self.diary_title
+        ws["A1"].font = Font(bold=True, size=14)
+        ws["A1"].alignment = Alignment(horizontal="center")
+        ws.merge_cells(f"A1:{last}1")
+        ws["A2"] = f"Група: {self.group_title}"
+        ws["A2"].alignment = Alignment(horizontal="center")
+        ws.merge_cells(f"A2:{last}2")
+        ws["A3"] = f"{self.profile['role']}: {self.profile['full_name']}    Дата: {format_day(day)}"
+        ws["A3"].alignment = Alignment(horizontal="center")
+        ws.merge_cells(f"A3:{last}3")
 
-        widths = [5, 8, 26, 12, 14, 16, 18, 60, 30]
+        # Двоярусна шапка, як у паперовій формі
+        top = {1: "Дата", 2: "Прізвище, ім'я дитини", 3: "Режимні моменти",
+               4: "Короткий опис діяльності", 5: "Характеристика діяльності дитини",
+               10: "Поведінка", 12: "Фото / відео"}
+        sub = {5: "Завдань самостійно", 6: "Завдань з допомогою", 7: "Завдань за зразком",
+               8: "Труднощі",
+               9: "Потреби (навідні запитання, повторення, наочність, час)",
+               10: "Взаємодія з ровесниками",
+               11: "Ігрова діяльність (рухлива, дидактична, сюжетно-рольова)"}
+        for col in range(1, ncols + 1):
+            for row in (5, 6):
+                c = ws.cell(row=row, column=col)
+                c.fill = head_fill if row == 5 else sub_fill
+                c.font = Font(bold=True, color="FFFFFF" if row == 5 else "1E3A2F")
+                c.alignment = center
+                c.border = border
+        for col, text in top.items():
+            ws.cell(row=5, column=col, value=text)
+        for col, text in sub.items():
+            ws.cell(row=6, column=col, value=text)
+        for col in (1, 2, 3, 4, 12):
+            ws.merge_cells(start_row=5, start_column=col, end_row=6, end_column=col)
+            ws.cell(row=5, column=col).fill = head_fill
+        ws.merge_cells("E5:I5")
+        ws.merge_cells("J5:K5")
+
+        row = 7
+        for e in entries:
+            first = row
+            for key, title, _, _ in PERIODS:
+                p = {**empty_period(), **e["periods"].get(key, {})}
+                tasks = p.get("tasks", {})
+                values = [
+                    format_day(day), e["child_name"], title,
+                    join_text(p["activities"], p["description"]),
+                    tasks.get("Самостійно") or None, tasks.get("З допомогою") or None,
+                    tasks.get("За зразком") or None,
+                    p["difficulties"].strip(), join_text(p["needs"], p["needs_note"]),
+                    p["interaction"].strip(), join_text(p["games"], p["games_note"]),
+                    ", ".join(p["media"]),
+                ]
+                for col, v in enumerate(values, start=1):
+                    c = ws.cell(row=row, column=col, value=v if v != "" else None)
+                    c.alignment = center if col in (5, 6, 7) else wrap_top
+                    c.border = border
+                ws.cell(row=row, column=3).font = Font(bold=True)
+                row += 1
+            for col in (1, 2):
+                ws.merge_cells(start_row=first, start_column=col, end_row=row - 1, end_column=col)
+                ws.cell(row=first, column=col).alignment = Alignment(vertical="center", wrap_text=True)
+            ws.cell(row=first, column=2).font = Font(bold=True)
+
+        widths = [13, 22, 16, 40, 12, 12, 12, 28, 32, 28, 30, 22]
         for idx, w in enumerate(widths, start=1):
-            ws.column_dimensions[openpyxl.utils.get_column_letter(idx)].width = w
-        ws.freeze_panes = "A5"
+            ws.column_dimensions[get_column_letter(idx)].width = w
+        ws.row_dimensions[6].height = 48
+        ws.freeze_panes = "D7"
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr.fitToPage = True
         wb.save(path)
         return path
