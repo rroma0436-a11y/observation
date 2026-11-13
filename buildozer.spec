@@ -1,64 +1,59 @@
-[app]
+name: CI Build APK
 
-# (str) Title of your application
-title = Щоденник спостережень
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
 
-# (str) Package name
-package.name = observationdiary
+jobs:
+  build:
+    runs-on: ubuntu-latest
 
-# (str) Package domain (needed for android packaging)
-package.domain = org.observation
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
 
-# (str) Source files where the let's go (relative to directory of spec)
-source.include_exts = py,png,jpg,kv,atlas
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-# (str) Directory where the source files are located
-source.dir = .
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          python3-pip \
+          build-essential \
+          git \
+          libffi-dev \
+          libssl-dev \
+          zlib1g-dev \
+          libncurses5-dev \
+          libncursesw5-dev \
+          liblzo2-dev \
+          autoconf \
+          libtool
 
-# (string) Version of the application
-version = 1.0
+    - name: Install Buildozer and Cython
+      run: |
+        pip install --upgrade pip
+        pip install cython==0.29.36 buildozer
 
-# (list) Application requirements (включно з openpyxl та et_xmlfile для Excel)
-requirements = python3,kivy,setuptools,plyer,openpyxl,et_xmlfile
+    - name: Build with Buildozer
+      run: |
+        export ANDROID_HOME=/usr/local/lib/android/sdk
+        export ANDROIDSDK=/usr/local/lib/android/sdk
+        export ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
+        
+        mkdir -p ~/.android
+        touch ~/.android/repositories.cfg
+        
+        yes | buildozer -v android release
 
-# (str) Icon of the application
-icon.filename = %(source.dir)s/icon.png
-
-# (list) Permissions (камера, мікрофон, зовнішня пам'ять та медіафайли)
-android.permissions = INTERNET, CAMERA, RECORD_AUDIO, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, READ_MEDIA_IMAGES, READ_MEDIA_AUDIO, READ_MEDIA_VIDEO
-
-# (list) Supported orientations
-orientation = portrait
-
-# (bool) Indicate if the application should be fullscreen or not
-fullscreen = 0
-
-# (bool) Enable AndroidX support
-android.androidx = True
-
-# (list) The android api to target that you want for the application
-android.api = 34
-
-# (list) Minimum API your APK / AAB will support (Піднято до 26 для сумісності з Android 8.0+)
-android.minapi = 26
-
-# (str) Explicit Android SDK version to use
-android.sdk = 34
-
-# (str) Android NDK version to use
-android.ndk = 25b
-
-# (str) The Android arch to build for (Додано arm64-v8a для сучасних 64-бітних пристроїв)
-android.archs = arm64-v8a
-
-# (bool) Use --private data storage (True) or public storage (False)
-android.private_storage = True
-
-# --- Налаштування релізного цифрового підпису ---
-android.release_keystore = observation-release-key.keystore
-android.release_keyalias = observation_alias
-
-# --- Змушуємо збирати саме APK замість AAB ---
-android.release_artifact = apk
-
-[buildozer]
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: package-release-apk
+        path: bin/*.apk
