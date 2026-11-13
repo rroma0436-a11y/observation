@@ -11,13 +11,12 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+v    uses: actions/checkout@v4
 
     - name: Build with Buildozer
-      uses: kivy/buildozer-action@v2
+      uses: ArtemSBulgakov/buildozer-action@v1
       with:
         command: android release
-        buildozer_version: master
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
