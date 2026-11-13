@@ -9,13 +9,13 @@ package.name = observationdiary
 # (str) Package domain (needed for android packaging)
 package.domain = org.observation
 
-# (str) Source files where the let's go (relative to directory of spec)
-source.include_exts = py,png,jpg,kv,atlas
-
-# (str) Directory where the source files are located
+# (str) Source code where the main.py live
 source.dir = .
 
-# (string) Version of the application
+# (list) Source files to include (додайте сюди інші розширення, якщо є: ttf, json, db, wav тощо)
+source.include_exts = py,png,jpg,kv,atlas,ttf,json
+
+# (str) Application versioning
 version = 1.0
 
 # (list) Application requirements
@@ -24,42 +24,53 @@ requirements = python3,kivy,setuptools,plyer,openpyxl,et_xmlfile
 # (str) Icon of the application
 icon.filename = %(source.dir)s/icon.png
 
-# (list) Permissions
-android.permissions = INTERNET, CAMERA, RECORD_AUDIO, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, READ_MEDIA_IMAGES, READ_MEDIA_AUDIO, READ_MEDIA_VIDEO
-
 # (list) Supported orientations
 orientation = portrait
 
 # (bool) Indicate if the application should be fullscreen or not
 fullscreen = 0
 
+#
+# Android specific
+#
+
+# (list) Permissions
+# CAMERA і RECORD_AUDIO також треба запитати в коді через android.permissions.request_permissions
+# WRITE/READ_EXTERNAL_STORAGE діють лише на старих Android (до 10-12), READ_MEDIA_* — на Android 13+
+android.permissions = INTERNET, CAMERA, RECORD_AUDIO, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, READ_MEDIA_IMAGES, READ_MEDIA_AUDIO, READ_MEDIA_VIDEO
+
+# (int) Target Android API (для Google Play потрібно 35)
+android.api = 34
+
+# (int) Minimum API your APK / AAB will support
+android.minapi = 26
+
+# (str) Android NDK version to use (закоментовано — buildozer підбере сумісну версію)
+#android.ndk = 25b
+
+# (bool) Automatically accept SDK license (потрібно для збірки в GitHub Actions / CI)
+android.accept_sdk_license = True
+
 # (bool) Enable AndroidX support
 android.androidx = True
 
-# (list) The android api to target that you want for the application
-android.api = 34
+# (list) The Android archs to build for (64-біт + 32-біт для старих телефонів)
+android.archs = arm64-v8a, armeabi-v7a
 
-# (list) Minimum API your APK / AAB will support
-android.minapi = 26
-
-# (str) Explicit Android SDK version to use (можна залишити закоментованим або вказати 34)
-#android.sdk = 34
-
-# (str) Android NDK version to use (закоментовуємо, щоб дія сама підібрала сумісну версію r25b або новішу)
-#android.ndk = 25b
-
-# (str) The Android arch to build for
-android.archs = arm64-v8a
-
-# (bool) Use --private data storage (True) or public storage (False)
+# (bool) Use --private data storage (True) or --dir public storage (False)
 android.private_storage = True
 
-# --- Налаштування релізного цифрового підпису ---
-android.release_keystore = observation-release-key.keystore
-android.release_keyalias = observation_alias
-
-# --- Змушуємо збирати саме APK замість AAB ---
+# (str) Формат релізної збірки: apk замість aab
 android.release_artifact = apk
+
+# --- Релізний підпис ---
+# Buildozer НЕ читає ключ зі spec-файлу. Перед "buildozer android release" задайте змінні оточення:
+#   export P4A_RELEASE_KEYSTORE=$PWD/observation-release-key.keystore
+#   export P4A_RELEASE_KEYSTORE_PASSWD=<пароль сховища>
+#   export P4A_RELEASE_KEYALIAS=observation_alias
+#   export P4A_RELEASE_KEYALIAS_PASSWD=<пароль ключа>
+# У GitHub Actions передайте їх через env: з secrets.
+
 
 [buildozer]
 
