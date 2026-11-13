@@ -1,59 +1,70 @@
-name: CI Build APK
+[app]
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
+# (str) Title of your application
+title = Щоденник спостережень
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+# (str) Package name
+package.name = observationdiary
 
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+# (str) Package domain (needed for android packaging)
+package.domain = org.observation
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
+# (str) Source files where the let's go (relative to directory of spec)
+source.include_exts = py,png,jpg,kv,atlas
 
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          python3-pip \
-          build-essential \
-          git \
-          libffi-dev \
-          libssl-dev \
-          zlib1g-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          liblzo2-dev \
-          autoconf \
-          libtool
+# (str) Directory where the source files are located
+source.dir = .
 
-    - name: Install Buildozer and Cython
-      run: |
-        pip install --upgrade pip
-        pip install cython==0.29.36 buildozer
+# (string) Version of the application
+version = 1.0
 
-    - name: Build with Buildozer
-      run: |
-        export ANDROID_HOME=/usr/local/lib/android/sdk
-        export ANDROIDSDK=/usr/local/lib/android/sdk
-        export ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
-        export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
-        
-        mkdir -p ~/.android
-        touch ~/.android/repositories.cfg
-        
-        yes | buildozer -v android release
+# (list) Application requirements
+requirements = python3,kivy,setuptools,plyer,openpyxl,et_xmlfile
 
-    - name: Upload APK artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: package-release-apk
-        path: bin/*.apk
+# (str) Icon of the application
+icon.filename = %(source.dir)s/icon.png
+
+# (list) Permissions
+android.permissions = INTERNET, CAMERA, RECORD_AUDIO, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, READ_MEDIA_IMAGES, READ_MEDIA_AUDIO, READ_MEDIA_VIDEO
+
+# (list) Supported orientations
+orientation = portrait
+
+# (bool) Indicate if the application should be fullscreen or not
+fullscreen = 0
+
+# (bool) Enable AndroidX support
+android.androidx = True
+
+# (list) The android api to target that you want for the application
+android.api = 34
+
+# (list) Minimum API your APK / AAB will support
+android.minapi = 26
+
+# (str) Explicit Android SDK version to use (закоментовано, щоб використовувати системний SDK GitHub)
+#android.sdk = 34
+
+# (str) Android NDK version to use (закоментовано, щоб уникнути конфліктів шляхів)
+#android.ndk = 25b
+
+# (str) The Android arch to build for
+android.archs = arm64-v8a
+
+# (bool) Use --private data storage (True) or public storage (False)
+android.private_storage = True
+
+# --- Налаштування релізного цифрового підпису ---
+android.release_keystore = observation-release-key.keystore
+android.release_keyalias = observation_alias
+
+# --- Змушуємо збирати саме APK замість AAB ---
+android.release_artifact = apk
+
+[buildozer]
+
+# (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))
+log_level = 2
+
+# (int) Display warning if buildozer is run as root (0 = False, 1 = True)
+warn_on_root = 1
