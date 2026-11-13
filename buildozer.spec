@@ -16,7 +16,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,json
 
 # (str) Application versioning
-version = 2.0
+version = 2.1
 
 # (list) Application requirements
 requirements = python3,kivy,setuptools,plyer,openpyxl,et_xmlfile
@@ -37,7 +37,7 @@ fullscreen = 0
 # (list) Permissions
 # CAMERA і RECORD_AUDIO також треба запитати в коді через android.permissions.request_permissions
 # WRITE/READ_EXTERNAL_STORAGE діють лише на старих Android (до 10-12), READ_MEDIA_* — на Android 13+
-android.permissions = INTERNET, CAMERA, RECORD_AUDIO, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, READ_MEDIA_IMAGES, READ_MEDIA_AUDIO, READ_MEDIA_VIDEO
+android.permissions = INTERNET, CAMERA, RECORD_AUDIO, POST_NOTIFICATIONS, WRITE_EXTERNAL_STORAGE, READ_EXTERNAL_STORAGE, READ_MEDIA_IMAGES, READ_MEDIA_AUDIO, READ_MEDIA_VIDEO
 
 # (int) Target Android API (для Google Play потрібно 35)
 android.api = 34
