@@ -45,12 +45,16 @@ jobs:
         export ANDROIDSDK=/usr/local/lib/android/sdk
         export ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
         export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
+        export ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
         export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
+        
+        # Видаляємо зайві змінні середовища, які плутають NDK
+        unset PACKAGES_PATH
         
         mkdir -p ~/.android
         touch ~/.android/repositories.cfg
         
-        yes | buildozer -v android release
+        buildozer -v android release
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
