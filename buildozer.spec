@@ -42,10 +42,10 @@ android.api = 34
 # (list) Minimum API your APK / AAB will support
 android.minapi = 26
 
-# (str) Explicit Android SDK version to use (закоментовано, щоб використовувати системний SDK GitHub)
+# (str) Explicit Android SDK version to use (можна залишити закоментованим або вказати 34)
 #android.sdk = 34
 
-# (str) Android NDK version to use (закоментовано, щоб уникнути конфліктів шляхів)
+# (str) Android NDK version to use (закоментовуємо, щоб дія сама підібрала сумісну версію r25b або новішу)
 #android.ndk = 25b
 
 # (str) The Android arch to build for
