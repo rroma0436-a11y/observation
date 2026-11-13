@@ -41,8 +41,7 @@ jobs:
 
     - name: Build with Buildozer
       run: |
-        export ANDROIDSDK="/usr/local/lib/android/sdk"
-        export ANDROIDNDK="/usr/local/lib/android/sdk/ndk/27.3.13750724"
+        export PATH=$PATH:~/.local/bin
         buildozer -v android release
 
     - name: Upload APK artifact
