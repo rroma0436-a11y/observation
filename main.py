@@ -24,7 +24,7 @@ from kivy.utils import escape_markup
 
 import android_bridge as ab
 import pdf_report
-from storage import (GAMES, NEEDS, PERIODS, ROLES, TASK_MODES, Diary, UserStore, format_day,
+from storage import (GAMES, IMAGE_EXT, NEEDS, PERIODS, ROLES, TASK_MODES, Diary, UserStore, format_day,
                      format_day_short, format_month, period_filled, period_lines, plural,
                      safe_filename, today)
 
@@ -627,7 +627,8 @@ class RecordTab(Screen):
         col.add_widget(self.child_spinner)
 
         col.add_widget(section("Режимні моменти"))
-        col.add_widget(hint("Натисніть на етап, щоб заповнити характеристику діяльності дитини."))
+        col.add_widget(hint("Натисніть на етап, щоб заповнити характеристику діяльності дитини. "
+                            "Фото та відео знімаються всередині кожного етапу — кнопки вгорі екрана."))
         self.period_btns = []
         for i, (key, title, _, _) in enumerate(PERIODS):
             b = Btn(text=title, bg=CARD_LIGHT, height=dp(80),
@@ -777,6 +778,24 @@ class PeriodScreen(Screen):
         self.undo = []
         sv, col = scroll_column()
 
+        # --- Фото та відео: на самому верху, щоб було одразу видно ---
+        media_card = card()
+        media_card.add_widget(section("Фото та відео"))
+        mrow = GridLayout(cols=3, spacing=dp(8), size_hint_y=None, height=dp(70))
+        mrow.add_widget(Btn(text="Зняти фото", bg=ACCENT, height=dp(70), font_size=FS_SMALL,
+                            on_release=lambda *_: self.app.take_photo(self._media_added)))
+        mrow.add_widget(Btn(text="Зняти відео", bg=ACCENT, height=dp(70), font_size=FS_SMALL,
+                            on_release=lambda *_: self.app.take_video(self._media_added)))
+        mrow.add_widget(Btn(text="З галереї", bg=SECOND, height=dp(70), font_size=FS_SMALL,
+                            on_release=lambda *_: self.app.pick_media(self._media_added)))
+        media_card.add_widget(mrow)
+        self.media_list = BoxLayout(orientation="vertical", size_hint_y=None, spacing=dp(6))
+        self.media_list.bind(minimum_height=self.media_list.setter("height"))
+        media_card.add_widget(self.media_list)
+        col.add_widget(media_card)
+        self._update_media()
+
+        col.add_widget(spacer())
         col.add_widget(section("Короткий опис діяльності"))
         col.add_widget(hint(period_hint))
         self.activity_btns = self._toggles(col, options, data["activities"])
@@ -820,15 +839,6 @@ class PeriodScreen(Screen):
         self.games_note.text = data["games_note"]
         col.add_widget(self.games_note)
 
-        col.add_widget(spacer())
-        col.add_widget(section("Фото та відео"))
-        mrow = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=BTN_H)
-        mrow.add_widget(Btn(text="Додати фото / відео", bg=SECOND, font_size=FS_SMALL, on_release=self.add_media))
-        mrow.add_widget(Btn(text="Прибрати всі", bg=SECOND, font_size=FS_SMALL, on_release=self.drop_media))
-        col.add_widget(mrow)
-        self.media_lbl = hint("")
-        col.add_widget(self.media_lbl)
-        self._update_media()
         col.add_widget(spacer(dp(20)))
 
         self.body.clear_widgets()
@@ -859,32 +869,50 @@ class PeriodScreen(Screen):
             self.desc.text = ""
 
     # --- медіа ---
-    def add_media(self, *_):
-        self.app.pick_media(self._media_added)
-
     def _media_added(self, names):
         self.media.extend(names)
         self._update_media()
+        self.save()  # одразу зберігаємо, щоб файли не загубились
 
-    def drop_media(self, *_):
-        if not self.media:
-            return
-
-        def do_drop():
-            for name in self.media:
-                try:
-                    os.remove(os.path.join(self.app.diary.media_dir, name))
-                except OSError:
-                    pass
-            self.media = []
+    def remove_media(self, name):
+        def do_remove():
+            try:
+                os.remove(os.path.join(self.app.diary.media_dir, name))
+            except OSError:
+                pass
+            if name in self.media:
+                self.media.remove(name)
             self._update_media()
             self.save()
-        confirm("Прибрати всі фото та відео цього етапу?", do_drop, "Прибрати")
+        confirm("Прибрати цей файл із запису?", do_remove, "Прибрати")
 
     def _update_media(self):
-        n = len(self.media)
-        self.media_lbl.text = (f"Додано: {n} {plural(n, 'файл', 'файли', 'файлів')}" if n
-                               else "Файли не додано")
+        self.media_list.clear_widgets()
+        if not self.media:
+            self.media_list.add_widget(hint("Файли ще не додано"))
+            return
+        photos = videos = 0
+        for name in self.media:
+            is_photo = name.lower().endswith(IMAGE_EXT)
+            if is_photo:
+                photos += 1
+                label = f"Фото {photos}"
+            else:
+                videos += 1
+                label = f"Відео {videos}"
+            try:
+                size = os.path.getsize(os.path.join(self.app.diary.media_dir, name)) / 1048576
+                label += f"  ({size:.1f} МБ)"
+            except OSError:
+                pass
+            row = BoxLayout(orientation="horizontal", size_hint_y=None, height=BTN_H_SMALL, spacing=dp(8))
+            lbl = Label(text=label, font_size=FS_SMALL, halign="left", valign="middle")
+            lbl.bind(size=lambda inst, *_: setattr(inst, "text_size", inst.size))
+            row.add_widget(lbl)
+            row.add_widget(Btn(text="Прибрати", bg=DANGER, size_hint_x=None, width=dp(120),
+                               height=BTN_H_SMALL, font_size=FS_SMALL,
+                               on_release=lambda *_, n=name: self.remove_media(n)))
+            self.media_list.add_widget(row)
 
     # --- збереження та навігація ---
     def collect(self):
@@ -1267,19 +1295,57 @@ class DiaryApp(App):
         except Exception as e:
             show_message(f"Не вдалося відкрити галерею:\n{e}")
 
+    def take_photo(self, callback):
+        self._camera(callback, ab.take_photo, "камеру")
+
+    def take_video(self, callback):
+        self._camera(callback, ab.take_video, "відеозйомку")
+
+    def _camera(self, callback, action, what):
+        if not ab.IS_ANDROID:
+            show_message("Зйомка доступна на телефоні.")
+            return
+        if not ab.has_camera_permission():
+            def on_result(granted):
+                if granted:
+                    Clock.schedule_once(lambda dt: self._camera(callback, action, what))
+                else:
+                    show_message("Щоб знімати фото й відео, дозвольте доступ до камери "
+                                 "(Налаштування → Застосунки → Щоденник спостережень → Дозволи).")
+            ab.request_camera_permission(on_result)
+            return
+        self._media_callback = callback
+        try:
+            action()
+        except Exception as e:
+            show_message(f"Не вдалося відкрити {what}:\n{e}")
+
+    def _copy_to_media(self, uris):
+        if uris and self.diary:
+            media_dir = self.diary.media_dir
+            self.run_bg(lambda: ab.copy_uris(uris, media_dir), self._media_copied)
+
     def on_activity_result(self, request_code, result_code, intent):
-        if result_code != ab.RESULT_OK or intent is None:
+        ok = result_code == ab.RESULT_OK
+        try:
+            if request_code == ab.REQUEST_PHOTO:
+                # камера з EXTRA_OUTPUT часто повертає порожній intent — це нормально
+                uri = ab.photo_result(ok)
+                if uri is not None:
+                    self._copy_to_media([uri])
+                return
+        except Exception as e:
+            show_message(f"Помилка обробки фото:\n{e}")
+            return
+        if not ok or intent is None:
             return
         try:
             if request_code == ab.REQUEST_SPEECH:
                 text = ab.speech_text(intent)
                 if text:
                     self._voice_result(text)
-            elif request_code == ab.REQUEST_MEDIA:
-                uris = ab.uris_from_result(intent)
-                if uris and self.diary:
-                    media_dir = self.diary.media_dir
-                    self.run_bg(lambda: ab.copy_uris(uris, media_dir), self._media_copied)
+            elif request_code in (ab.REQUEST_MEDIA, ab.REQUEST_VIDEO):
+                self._copy_to_media(ab.uris_from_result(intent))
         except Exception as e:
             show_message(f"Помилка обробки результату:\n{e}")
 
