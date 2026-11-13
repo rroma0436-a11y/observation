@@ -13,48 +13,11 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          python3-pip \
-          build-essential \
-          git \
-          libffi-dev \
-          libssl-dev \
-          zlib1g-dev \
-          libncurses5-dev \
-          libncursesw5-dev \
-          liblzo2-dev \
-          autoconf \
-          libtool
-
-    - name: Install Buildozer and Cython
-      run: |
-        pip install --upgrade pip
-        pip install cython==0.29.36 buildozer
-
     - name: Build with Buildozer
-      run: |
-        export ANDROID_HOME=/usr/local/lib/android/sdk
-        export ANDROIDSDK=/usr/local/lib/android/sdk
-        export ANDROID_NDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
-        export ANDROIDNDK=/usr/local/lib/android/sdk/ndk/27.3.13750724
-        export ANDROID_NDK_HOME=/usr/local/lib/android/sdk/ndk/27.3.13750724
-        export PATH=$PATH:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/build-tools/34.0.0
-        
-        # Видаляємо зайві змінні середовища, які плутають NDK
-        unset PACKAGES_PATH
-        
-        mkdir -p ~/.android
-        touch ~/.android/repositories.cfg
-        
-        buildozer -v android release
+      uses: kivy/buildozer-action@v2
+      with:
+        command: android release
+        buildozer_version: master
 
     - name: Upload APK artifact
       uses: actions/upload-artifact@v4
